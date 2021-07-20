@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'test_helper'
 
 #  was the web request successful?
@@ -8,6 +10,17 @@ require 'test_helper'
 
 class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::IntegrationTest
   describe DeviseTokenAuth::RegistrationsController do
+
+    def mock_registration_params
+      {
+        email: Faker::Internet.email,
+        password: 'secret123',
+        password_confirmation: 'secret123',
+        confirm_success_url: Faker::Internet.url,
+        unpermitted_param: '(x_x)'
+      }
+    end
+
     describe 'Validate non-empty body' do
       before do
         # need to post empty data
@@ -39,13 +52,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
         @mails_sent = ActionMailer::Base.deliveries.count
 
         post '/auth',
-             params: {
-               email: Faker::Internet.email,
-               password: 'secret123',
-               password_confirmation: 'secret123',
-               confirm_success_url: Faker::Internet.url,
-               unpermitted_param: '(x_x)'
-             }
+             params: mock_registration_params
 
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
@@ -78,6 +85,41 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
 
       test 'only one email was sent' do
         assert_equal @mails_sent + 1, ActionMailer::Base.deliveries.count
+      end
+    end
+
+    describe 'using allow_unconfirmed_access_for' do
+      before do
+        @original_duration = Devise.allow_unconfirmed_access_for
+        Devise.allow_unconfirmed_access_for = nil
+      end
+
+      test 'auth headers were returned in response' do
+        post '/auth', params: mock_registration_params
+        assert response.headers['access-token']
+        assert response.headers['token-type']
+        assert response.headers['client']
+        assert response.headers['expiry']
+        assert response.headers['uid']
+      end
+
+      describe 'using auth cookie' do
+        before do
+          DeviseTokenAuth.cookie_enabled = true
+        end
+
+        test 'auth cookie was returned in response' do
+          post '/auth', params: mock_registration_params
+          assert response.cookies[DeviseTokenAuth.cookie_name]
+        end
+
+        after do
+          DeviseTokenAuth.cookie_enabled = false
+        end
+      end
+
+      after do
+        Devise.allow_unconfirmed_access_for = @original_duration
       end
     end
 
@@ -177,7 +219,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
         @mail = ActionMailer::Base.deliveries.last
-        @sent_redirect_url = URI.decode(@mail.body.match(/redirect_url=([^&]*)(&|\")/)[1])
+        @sent_redirect_url = CGI.unescape(@mail.body.match(/redirect_url=([^&]*)(&|\")/)[1])
       end
 
       teardown do
@@ -303,7 +345,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
       end
 
       test 'user should not have been created' do
-        assert_nil @resource.id
+        refute @resource.persisted?
       end
 
       test 'error should be returned in the response' do
@@ -331,7 +373,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
       end
 
       test 'user should not have been created' do
-        assert_nil @resource.id
+        refute @resource.persisted?
       end
 
       test 'error should be returned in the response' do
@@ -360,7 +402,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
       end
 
       test 'user should have been created' do
-        assert_nil @resource.id
+        refute @resource.persisted?
       end
 
       test 'error should be returned in the response' do
@@ -374,7 +416,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
 
     describe 'Existing users' do
       before do
-        @existing_user = users(:confirmed_email_user)
+        @existing_user = create(:user, :confirmed)
 
         post '/auth',
              params: { email: @existing_user.email,
@@ -391,7 +433,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
       end
 
       test 'user should have been created' do
-        assert_nil @resource.id
+        refute @resource.persisted?
       end
 
       test 'error should be returned in the response' do
@@ -402,7 +444,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
     describe 'Destroy user account' do
       describe 'success' do
         before do
-          @existing_user = users(:confirmed_email_user)
+          @existing_user = create(:user, :confirmed)
           @auth_headers  = @existing_user.create_new_auth_token
           @client_id     = @auth_headers['client']
 
@@ -449,7 +491,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
     describe 'Update user account' do
       describe 'existing user' do
         before do
-          @existing_user = users(:confirmed_email_user)
+          @existing_user = create(:user, :confirmed)
           @auth_headers  = @existing_user.create_new_auth_token
           @client_id     = @auth_headers['client']
 
@@ -463,7 +505,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
               # test valid update param
               @resource_class = User
               @new_operating_thetan = 1_000_000
-              @email = 'AlternatingCase2@example.com'
+              @email = Faker::Internet.safe_email
               @request_params = {
                 operating_thetan: @new_operating_thetan,
                 email: @email
@@ -497,13 +539,13 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
             end
 
             test 'Supply current password' do
-              @request_params[:current_password] = 'secret123'
-              @request_params[:email] = 'new.email@example.com'
+              @request_params[:current_password] = @existing_user.password
+              @request_params[:email] = @existing_user.email
 
               put '/auth', params: @request_params, headers: @auth_headers
               @data = JSON.parse(response.body)
               @existing_user.reload
-              assert_equal @existing_user.email, 'new.email@example.com'
+              assert_equal @existing_user.email, @request_params[:email]
             end
           end
 
@@ -570,7 +612,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
               # test valid update param
               @resource_class = User
               @new_operating_thetan = 1_000_000
-              @email = 'AlternatingCase2@example.com'
+              @email = Faker::Internet.safe_email
               @request_params = {
                 operating_thetan: @new_operating_thetan,
                 email: @email
@@ -621,7 +663,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
           before do
             DeviseTokenAuth.check_current_password_before_update = :password
             @new_operating_thetan = 1_000_000
-            @email = 'AlternatingCase2@example.com'
+            @email = Faker::Internet.safe_email
           end
 
           after do
@@ -666,7 +708,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
 
       describe 'invalid user' do
         before do
-          @existing_user = users(:confirmed_email_user)
+          @existing_user = create(:user, :confirmed)
           @auth_headers  = @existing_user.create_new_auth_token
           @client_id     = @auth_headers['client']
 
@@ -703,7 +745,7 @@ class DeviseTokenAuth::RegistrationsControllerTest < ActionDispatch::Integration
 
     describe 'Ouath user has existing email' do
       before do
-        @existing_user = users(:duplicate_email_facebook_user)
+        @existing_user = create(:user, :facebook, :confirmed)
 
         post '/auth',
              params: { email: @existing_user.email,

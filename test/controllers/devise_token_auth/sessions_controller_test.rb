@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'test_helper'
 
 #  was the web request successful?
@@ -10,33 +12,20 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
   describe DeviseTokenAuth::SessionsController do
     describe 'Confirmed user' do
       before do
-        @existing_user = users(:confirmed_email_user)
-        @existing_user.skip_confirmation!
-        @existing_user.save!
+        @existing_user = create(:user, :with_nickname, :confirmed)
       end
 
       describe 'success' do
         before do
-          @old_sign_in_count      = @existing_user.sign_in_count
-          @old_current_sign_in_at = @existing_user.current_sign_in_at
-          @old_last_sign_in_at    = @existing_user.last_sign_in_at
-          @old_sign_in_ip         = @existing_user.current_sign_in_ip
-          @old_last_sign_in_ip    = @existing_user.last_sign_in_ip
+          @user_session_params = {
+            email: @existing_user.email,
+            password: @existing_user.password
+          }
 
-          post :create,
-               params: {
-                 email: @existing_user.email,
-                 password: 'secret123'
-               }
+          post :create, params: @user_session_params
 
           @resource = assigns(:resource)
           @data = JSON.parse(response.body)
-
-          @new_sign_in_count      = @resource.sign_in_count
-          @new_current_sign_in_at = @resource.current_sign_in_at
-          @new_last_sign_in_at    = @resource.last_sign_in_at
-          @new_sign_in_ip         = @resource.current_sign_in_ip
-          @new_last_sign_in_ip    = @resource.last_sign_in_ip
         end
 
         test 'request should succeed' do
@@ -47,29 +36,63 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
           assert_equal @existing_user.email, @data['data']['email']
         end
 
-        describe 'trackable' do
-          test 'sign_in_count incrementns' do
-            assert_equal @old_sign_in_count + 1, @new_sign_in_count
+        describe 'using auth cookie' do
+          before do
+            DeviseTokenAuth.cookie_enabled = true
           end
 
-          test 'current_sign_in_at is updated' do
-            refute @old_current_sign_in_at
-            assert @new_current_sign_in_at
+          test 'request should return auth cookie' do
+            post :create, params: @user_session_params
+            assert response.cookies[DeviseTokenAuth.cookie_name]
           end
 
-          test 'last_sign_in_at is updated' do
-            refute @old_last_sign_in_at
-            assert @new_last_sign_in_at
+          after do
+            DeviseTokenAuth.cookie_enabled = false
+          end
+        end
+
+        describe "with multiple clients and headers don't change in each request" do
+          before do
+            # Set the max_number_of_devices to a lower number
+            #  to expedite tests! (Default is 10)
+            DeviseTokenAuth.max_number_of_devices = 2
+            DeviseTokenAuth.change_headers_on_each_request = false
           end
 
-          test 'sign_in_ip is updated' do
-            refute @old_sign_in_ip
-            assert_equal '0.0.0.0', @new_sign_in_ip
+          test 'should limit the maximum number of concurrent devices' do
+            # increment the number of devices until the maximum is exceeded
+            1.upto(DeviseTokenAuth.max_number_of_devices + 1).each do |n|
+              initial_tokens = @existing_user.reload.tokens
+
+              assert_equal(
+                [n, DeviseTokenAuth.max_number_of_devices].min,
+                @existing_user.reload.tokens.length
+              )
+
+              # Already have the max number of devices
+              post :create, params: @user_session_params
+
+              # A session for a new device maintains the max number of concurrent devices
+              refute_equal initial_tokens, @existing_user.reload.tokens
+            end
           end
 
-          test 'last_sign_in_ip is updated' do
-            refute @old_last_sign_in_ip
-            assert_equal '0.0.0.0', @new_last_sign_in_ip
+          test 'should drop old tokens when max number of devices is exceeded' do
+            1.upto(DeviseTokenAuth.max_number_of_devices).each do |n|
+              post :create, params: @user_session_params
+            end
+
+            oldest_token, _ = @existing_user.reload.tokens \
+                                .min_by { |cid, v| v[:expiry] || v['expiry'] }
+
+            post :create, params: @user_session_params
+
+            assert_not_includes @existing_user.reload.tokens.keys, oldest_token
+          end
+
+          after do
+            DeviseTokenAuth.max_number_of_devices = 10
+            DeviseTokenAuth.change_headers_on_each_request = true
           end
         end
       end
@@ -78,7 +101,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
         before do
           get :new,
               params: { nickname: @existing_user.nickname,
-                        password: 'secret123' }
+                        password: @existing_user.password }
           @data = JSON.parse(response.body)
         end
 
@@ -95,7 +118,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
         before do
           request.headers.merge!(
             'email' => @existing_user.email,
-            'password' => 'secret123'
+            'password' => @existing_user.password
           )
 
           head :create
@@ -111,7 +134,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
         before do
           post :create,
                params: { nickname: @existing_user.nickname,
-                         password: 'secret123' }
+                         password: @existing_user.password }
           @data = JSON.parse(response.body)
         end
 
@@ -146,6 +169,24 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
 
         test 'session was destroyed' do
           assert_equal true, @controller.reset_session_called
+        end
+
+        describe 'using auth cookie' do
+          before do
+            DeviseTokenAuth.cookie_enabled = true
+            @auth_token = @existing_user.create_new_auth_token
+            @controller.send(:cookies)[DeviseTokenAuth.cookie_name] = { value: @auth_token.to_json }
+          end
+
+          test 'auth cookie was destroyed' do
+            assert_equal @auth_token.to_json, @controller.send(:cookies)[DeviseTokenAuth.cookie_name] # sanity check
+            delete :destroy, format: :json
+            assert_nil @controller.send(:cookies)[DeviseTokenAuth.cookie_name]
+          end
+
+          after do
+            DeviseTokenAuth.cookie_enabled = false
+          end
         end
       end
 
@@ -223,7 +264,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
           @resource_class = User
           @request_params = {
             email: @existing_user.email.upcase,
-            password: 'secret123'
+            password: @existing_user.password
           }
         end
 
@@ -246,7 +287,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
           @request_params = {
             # adding whitespace before and after email
             email: " #{@existing_user.email}  ",
-            password: 'secret123'
+            password: @existing_user.password
           }
         end
 
@@ -266,9 +307,9 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
 
     describe 'Unconfirmed user' do
       before do
-        @unconfirmed_user = users(:unconfirmed_email_user)
+        @unconfirmed_user = create(:user)
         post :create, params: { email: @unconfirmed_user.email,
-                                password: 'secret123' }
+                                password: @unconfirmed_user.password }
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
       end
@@ -289,10 +330,10 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
       before do
         @original_duration = Devise.allow_unconfirmed_access_for
         Devise.allow_unconfirmed_access_for = 3.days
-        @recent_unconfirmed_user = users(:recent_unconfirmed_email_user)
+        @recent_unconfirmed_user = create(:user)
         post :create,
              params: { email: @recent_unconfirmed_user.email,
-                       password: 'secret123' }
+                       password: @recent_unconfirmed_user.password }
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
       end
@@ -312,18 +353,12 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
 
     describe 'Unconfirmed user with expired unconfirmed access' do
       before do
-        @original_duration = Devise.allow_unconfirmed_access_for
-        Devise.allow_unconfirmed_access_for = 3.days
-        @unconfirmed_user = users(:unconfirmed_email_user)
+        @unconfirmed_user = create(:user, :unconfirmed)
         post :create,
              params: { email: @unconfirmed_user.email,
-                       password: 'secret123' }
+                       password: @unconfirmed_user.password }
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
-      end
-
-      after do
-        Devise.allow_unconfirmed_access_for = @original_duration
       end
 
       test 'request should fail' do
@@ -363,13 +398,11 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
       end
 
       before do
-        @existing_user = mangs(:confirmed_email_user)
-        @existing_user.skip_confirmation!
-        @existing_user.save!
+        @existing_user = create(:mang_user, :confirmed)
 
         post :create,
              params: { email: @existing_user.email,
-                       password: 'secret123' }
+                       password: @existing_user.password }
 
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
@@ -394,12 +427,11 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
       end
 
       before do
-        @existing_user = only_email_users(:user)
-        @existing_user.save!
+        @existing_user = create(:only_email_user)
 
         post :create,
              params: { email: @existing_user.email,
-                       password: 'secret123' }
+                       password: @existing_user.password }
 
         @resource = assigns(:resource)
         @data = JSON.parse(response.body)
@@ -437,10 +469,10 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
 
       describe 'locked user' do
         before do
-          @locked_user = lockable_users(:locked_user)
+          @locked_user = create(:lockable_user, :locked)
           post :create,
                params: { email: @locked_user.email,
-                         password: 'secret123' }
+                         password: @locked_user.password }
           @data = JSON.parse(response.body)
         end
 
@@ -456,7 +488,7 @@ class DeviseTokenAuth::SessionsControllerTest < ActionController::TestCase
 
       describe 'unlocked user with bad password' do
         before do
-          @unlocked_user = lockable_users(:unlocked_user)
+          @unlocked_user = create(:lockable_user)
           post :create,
                params: { email: @unlocked_user.email,
                          password: 'bad-password' }

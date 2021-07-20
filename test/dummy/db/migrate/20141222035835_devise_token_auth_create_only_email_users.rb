@@ -1,14 +1,16 @@
+# frozen_string_literal: true
+
 include MigrationDatabaseHelper
 
 class DeviseTokenAuthCreateOnlyEmailUsers < ActiveRecord::Migration[4.2]
   def change
     create_table(:only_email_users) do |t|
       ## Required
-      t.string :provider, :null => false
-      t.string :uid, :null => false, :default => ""
+      t.string :provider, null: false
+      t.string :uid, null: false, default: ''
 
       ## Database authenticatable
-      t.string :encrypted_password, :null => false, :default => ""
+      t.string :encrypted_password, null: false, default: ''
 
       ## Recoverable
       #t.string   :reset_password_token
@@ -16,13 +18,6 @@ class DeviseTokenAuthCreateOnlyEmailUsers < ActiveRecord::Migration[4.2]
 
       ## Rememberable
       #t.datetime :remember_created_at
-
-      ## Trackable
-      #t.integer  :sign_in_count, :default => 0, :null => false
-      #t.datetime :current_sign_in_at
-      #t.datetime :last_sign_in_at
-      #t.string   :current_sign_in_ip
-      #t.string   :last_sign_in_ip
 
       ## Confirmable
       #t.string   :confirmation_token
@@ -52,7 +47,7 @@ class DeviseTokenAuthCreateOnlyEmailUsers < ActiveRecord::Migration[4.2]
     end
 
     add_index :only_email_users, :email
-    add_index :only_email_users, [:uid, :provider],     :unique => true
+    add_index :only_email_users, [:uid, :provider],     unique: true
     #add_index :only_email_users, :reset_password_token, :unique => true
     # add_index :only_email_users, :confirmation_token,   :unique => true
     # add_index :only_email_users, :unlock_token,         :unique => true

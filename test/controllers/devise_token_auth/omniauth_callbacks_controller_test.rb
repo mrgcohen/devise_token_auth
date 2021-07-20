@@ -1,6 +1,6 @@
-require 'test_helper'
-require 'mocha/test_unit'
+# frozen_string_literal: true
 
+require 'test_helper'
 #  was the web request successful?
 #  was the user redirected to the right page?
 #  was the user successfully authenticated?
@@ -18,7 +18,7 @@ class OmniauthTest < ActionDispatch::IntegrationTest
 
   def get_parsed_data_json
     encoded_json_data = @response.body.match(/var data \= JSON.parse\(decodeURIComponent\(\'(.+)\'\)\)\;/)[1]
-    JSON.parse(URI.unescape(encoded_json_data))
+    JSON.parse(CGI.unescape(encoded_json_data))
   end
 
   describe 'success callback' do
@@ -57,7 +57,7 @@ class OmniauthTest < ActionDispatch::IntegrationTest
       expiry = controller.auth_params[:expiry]
 
       # the expiry should have been set
-      assert_equal expiry, @resource.tokens[client_id]['expiry']
+      assert_equal expiry, @resource.tokens[client_id]['expiry'] || @resource.tokens[client_id][:expiry]
 
       # the token sent down to the client should now be valid
       assert @resource.valid_token?(token, client_id)
@@ -70,7 +70,10 @@ class OmniauthTest < ActionDispatch::IntegrationTest
     end
 
     test 'sign_in was called' do
-      User.any_instance.expects(:sign_in)
+      DeviseTokenAuth::OmniauthCallbacksController.any_instance\
+        .expects(:sign_in).with(
+          :user, instance_of(User), has_entries(store: false, bypass: false)
+        )
       get_success
     end
 
@@ -152,6 +155,8 @@ class OmniauthTest < ActionDispatch::IntegrationTest
       describe 'with new user' do
         before do
           User.any_instance.expects(:new_record?).returns(true).at_least_once
+          # https://docs.mongodb.com/mongoid/master/tutorials/mongoid-documents/#notes-on-persistence
+          User.any_instance.expects(:save!).returns(true)
         end
 
         test 'response contains oauth_registration attr' do
@@ -312,60 +317,125 @@ class OmniauthTest < ActionDispatch::IntegrationTest
   end
 
   describe 'Using redirect_whitelist' do
-    before do
-      @user_email = 'slemp.diggler@sillybandz.gov'
-      OmniAuth.config.mock_auth[:facebook] = OmniAuth::AuthHash.new(
-        provider: 'facebook',
-        uid: '123545',
-        info: {
-          name: 'chong',
-          email: @user_email
-        }
-      )
-      @good_redirect_url = Faker::Internet.url
-      @bad_redirect_url = Faker::Internet.url
-      DeviseTokenAuth.redirect_whitelist = [@good_redirect_url]
-    end
 
-    teardown do
-      DeviseTokenAuth.redirect_whitelist = nil
-    end
-
-    test 'request using non-whitelisted redirect fail' do
-      get '/auth/facebook',
-          params: { auth_origin_url: @bad_redirect_url,
-                    omniauth_window_type: 'newWindow' }
-
-      follow_all_redirects!
-
-      data = get_parsed_data_json
-      assert_equal "Redirect to &#39;#{@bad_redirect_url}&#39; not allowed.",
-                   data['error']
-    end
-
-    test 'request to whitelisted redirect should succeed' do
-      get '/auth/facebook',
-          params: {
-            auth_origin_url: @good_redirect_url,
-            omniauth_window_type: 'newWindow'
+    describe "newWindow" do
+      before do
+        @user_email = 'slemp.diggler@sillybandz.gov'
+        OmniAuth.config.mock_auth[:facebook] = OmniAuth::AuthHash.new(
+          provider: 'facebook',
+          uid: '123545',
+          info: {
+            name: 'chong',
+            email: @user_email
           }
+        )
+        @good_redirect_url = Faker::Internet.url
+        @bad_redirect_url = Faker::Internet.url
+        DeviseTokenAuth.redirect_whitelist = [@good_redirect_url]
+      end
 
-      follow_all_redirects!
+      teardown do
+        DeviseTokenAuth.redirect_whitelist = nil
+      end
 
-      data = get_parsed_data_json
-      assert_equal @user_email, data['email']
+      test 'request using non-whitelisted redirect fail' do
+        get '/auth/facebook',
+            params: { auth_origin_url: @bad_redirect_url,
+                      omniauth_window_type: 'newWindow' }
+
+        follow_all_redirects!
+
+        data = get_parsed_data_json
+        assert_equal "Redirect to '#{@bad_redirect_url}' not allowed.",
+                    data['error']
+      end
+
+      test 'request to whitelisted redirect should succeed' do
+        get '/auth/facebook',
+            params: {
+              auth_origin_url: @good_redirect_url,
+              omniauth_window_type: 'newWindow'
+            }
+
+        follow_all_redirects!
+
+        data = get_parsed_data_json
+        assert_equal @user_email, data['email']
+      end
+
+      test 'should support wildcards' do
+        DeviseTokenAuth.redirect_whitelist = ["#{@good_redirect_url[0..8]}*"]
+        get '/auth/facebook',
+            params: { auth_origin_url: @good_redirect_url,
+                      omniauth_window_type: 'newWindow' }
+
+        follow_all_redirects!
+
+        data = get_parsed_data_json
+        assert_equal @user_email, data['email']
+      end
     end
 
-    test 'should support wildcards' do
-      DeviseTokenAuth.redirect_whitelist = ["#{@good_redirect_url[0..8]}*"]
-      get '/auth/facebook',
-          params: { auth_origin_url: @good_redirect_url,
-                    omniauth_window_type: 'newWindow' }
+    describe "sameWindow" do
+      before do
+        @user_email = 'slemp.diggler@sillybandz.gov'
+        OmniAuth.config.mock_auth[:facebook] = OmniAuth::AuthHash.new(
+          provider: 'facebook',
+          uid: '123545',
+          info: {
+            name: 'chong',
+            email: @user_email
+          }
+        )
+        @good_redirect_url = '/auth_origin'
+        @bad_redirect_url = Faker::Internet.url
+        DeviseTokenAuth.redirect_whitelist = [@good_redirect_url]
+      end
 
-      follow_all_redirects!
+      teardown do
+        DeviseTokenAuth.redirect_whitelist = nil
+      end
 
-      data = get_parsed_data_json
-      assert_equal @user_email, data['email']
+      test 'request using non-whitelisted redirect fail' do
+        get '/auth/facebook',
+            params: { auth_origin_url: @bad_redirect_url,
+                      omniauth_window_type: 'sameWindow' }
+
+        follow_all_redirects!
+
+        assert_equal 200, response.status
+        assert_equal true, response.body.include?("Redirect to '#{@bad_redirect_url}' not allowed")
+      end
+
+      test 'request to whitelisted redirect should succeed' do
+        get '/auth/facebook',
+            params: {
+              auth_origin_url: '/auth_origin',
+              omniauth_window_type: 'sameWindow'
+            }
+
+        follow_all_redirects!
+
+        assert_equal 200, response.status
+        assert_equal false, response.body.include?("Redirect to '#{@good_redirect_url}' not allowed")
+      end
+
+      test 'should support wildcards' do
+        DeviseTokenAuth.redirect_whitelist = ["#{@good_redirect_url[0..8]}*"]
+        get '/auth/facebook',
+            params: {
+              auth_origin_url: '/auth_origin',
+              omniauth_window_type: 'sameWindow'
+            }
+
+        follow_all_redirects!
+
+        assert_equal 200, response.status
+        assert_equal false, response.body.include?("Redirect to '#{@good_redirect_url}' not allowed")
+      end
+
+
     end
+
   end
 end

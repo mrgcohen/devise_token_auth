@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module DeviseTokenAuth
   module Controllers
     module Helpers
@@ -26,18 +28,12 @@ module DeviseTokenAuth
         #     before_action ->{ authenticate_blogger! :admin }  # Redirects to the admin login page
         #     current_blogger :user                             # Preferably returns a User if one is signed in
         #
-        def devise_token_auth_group(group_name, opts={})
-          mappings = "[#{ opts[:contains].map { |m| ":#{m}" }.join(',') }]"
+        def devise_token_auth_group(group_name, opts = {})
+          mappings = "[#{opts[:contains].map { |m| ":#{m}" }.join(',')}]"
 
           class_eval <<-METHODS, __FILE__, __LINE__ + 1
             def authenticate_#{group_name}!(favourite=nil, opts={})
               unless #{group_name}_signed_in?
-                mappings = #{mappings}
-                mappings.unshift mappings.delete(favourite.to_sym) if favourite
-                mappings.each do |mapping|
-                  set_user_by_token(mapping)
-                end
-
                 unless current_#{group_name}
                   render_authenticate_error
                 end
@@ -45,12 +41,14 @@ module DeviseTokenAuth
             end
 
             def #{group_name}_signed_in?
-              #{mappings}.any? do |mapping|
-                set_user_by_token(mapping)
-              end
+              !!current_#{group_name}
             end
 
             def current_#{group_name}(favourite=nil)
+              @current_#{group_name} ||= set_group_user_by_token(favourite)
+            end
+            
+            def set_group_user_by_token(favourite)
               mappings = #{mappings}
               mappings.unshift mappings.delete(favourite.to_sym) if favourite
               mappings.each do |mapping|
@@ -73,7 +71,12 @@ module DeviseTokenAuth
             end
 
             if respond_to?(:helper_method)
-              helper_method "current_#{group_name}", "current_#{group_name.to_s.pluralize}", "#{group_name}_signed_in?", "render_authenticate_error"
+              helper_method(
+                "current_#{group_name}",
+                "current_#{group_name.to_s.pluralize}",
+                "#{group_name}_signed_in?",
+                "render_authenticate_error"
+              )
             end
           METHODS
         end
@@ -140,7 +143,12 @@ module DeviseTokenAuth
 
         ActiveSupport.on_load(:action_controller) do
           if respond_to?(:helper_method)
-            helper_method "current_#{mapping}", "#{mapping}_signed_in?", "#{mapping}_session", "render_authenticate_error"
+            helper_method(
+              "current_#{mapping}",
+              "#{mapping}_signed_in?",
+              "#{mapping}_session",
+              'render_authenticate_error'
+            )
           end
         end
       end

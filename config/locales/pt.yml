@@ -14,6 +14,8 @@ pt:
       account_with_uid_destroyed: "A conta com uid '%{uid}' foi excluída."
       account_to_destroy_not_found: "Não foi possível encontrar a conta para exclusão."
       user_not_found: "Utilizador não encontrado."
+    omniauth:
+      not_allowed_redirect_url: "Redirecionamento para '%{redirect_url}' não permitido."
     passwords:
       missing_email: "Informe o endereço de e-mail."
       missing_redirect_url: "URL para redirecionamento não informada."
@@ -24,9 +26,10 @@ pt:
       missing_passwords: "Preencha a senha e a confirmação de senha."
       successfully_updated: "Senha atualizada com sucesso."
   errors:
-    validate_sign_up_params: "Os dados submetidos na requisição de registo são inválidos."
-    validate_account_update_params: "Os dados submetidos para atualização de conta são inválidos."
-    not_email: "não é um e-mail"
+    messages:
+      validate_sign_up_params: "Os dados submetidos na requisição de registo são inválidos."
+      validate_account_update_params: "Os dados submetidos para atualização de conta são inválidos."
+      not_email: "não é um e-mail"
   devise:
     mailer:
       confirmation_instructions:

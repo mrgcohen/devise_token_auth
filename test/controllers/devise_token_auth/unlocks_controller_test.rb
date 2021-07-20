@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'test_helper'
 
 #  was the web request successful?
@@ -33,7 +35,7 @@ class DeviseTokenAuth::UnlocksControllerTest < ActionController::TestCase
 
     describe 'Unlocking user' do
       before do
-        @resource = lockable_users(:unlocked_user)
+        @resource = create(:lockable_user)
       end
 
       describe 'request unlock without email' do
@@ -55,7 +57,7 @@ class DeviseTokenAuth::UnlocksControllerTest < ActionController::TestCase
       end
 
       describe 'request unlock' do
-        describe 'unknown user should return 404' do
+        describe 'without paranoid mode' do
           before do
             post :create, params: { email: 'chester@cheet.ah' }
             @data = JSON.parse(response.body)
@@ -66,9 +68,26 @@ class DeviseTokenAuth::UnlocksControllerTest < ActionController::TestCase
 
           test 'errors should be returned' do
             assert @data['errors']
-            assert_equal @data['errors'],
-                         [I18n.t('devise_token_auth.passwords.user_not_found',
-                                 email: 'chester@cheet.ah')]
+            assert_equal @data['errors'], [I18n.t('devise_token_auth.unlocks.user_not_found',
+                                                  email: 'chester@cheet.ah')]
+          end
+        end
+
+        describe 'with paranoid mode' do
+          before do
+            swap Devise, paranoid: true do
+              post :create, params: { email: 'chester@cheet.ah' }
+              @data = JSON.parse(response.body)
+            end
+          end
+
+          test 'unknown user should return 404' do
+            assert_equal 404, response.status
+          end
+
+          test 'errors should be returned' do
+            assert @data['errors']
+            assert_equal @data['errors'], [I18n.t('devise_token_auth.unlocks.sended_paranoid')]
           end
         end
 
